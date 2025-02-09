@@ -1,0 +1,132 @@
+
+
+import requests
+from bs4 import BeautifulSoup
+import nltk
+from nltk.tokenize import sent_tokenize, word_tokenize
+from nltk.corpus import stopwords
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+import time
+
+# Used to download required NLTK data
+try:
+    nltk.data.find('tokenizers/punkt')
+    nltk.data.find('corpora/stopwords')
+except LookupError:
+    print("Downloading required NLTK data...")
+    nltk.download('punkt')
+    nltk.download('stopwords')
+
+class WebScrapingChatbot:
+    def __init__(self):
+        self.stop_words = set(stopwords.words('english'))
+        self.scraped_content = []
+        self.last_scrape_time = None
+        self.scrape_cache = {}
+        
+    def scrape_website(self, url, cache_duration=3600): 
+        try:
+            current_time = time.time()
+            
+            if url in self.scrape_cache:
+                if current_time - self.scrape_cache[url]['time'] < cache_duration:
+                    self.scraped_content = self.scrape_cache[url]['content']
+                    print("Using cached content...")
+                    return
+            
+            # Fetching the website content
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            }
+            response = requests.get(url, headers=headers, timeout=10)
+            response.raise_for_status() 
+            
+            # Parse the content
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            for script in soup(['script', 'style', 'meta', 'link']):
+                script.decompose()
+            
+            content_tags = ['p', 'h1', 'h2', 'h3', 'h4', 'li', 'div', 'article']
+            self.scraped_content = []
+            
+            for tag in content_tags:
+                elements = soup.find_all(tag)
+                for element in elements:
+                    text = element.get_text().strip()
+                    if text and len(text) > 20:  # Filter out very short texts
+                        sentences = sent_tokenize(text)
+                        self.scraped_content.extend(sentences)
+            
+            self.scrape_cache[url] = {
+                'content': self.scraped_content,
+                'time': current_time
+            }
+            
+            print(f"Successfully scraped {len(self.scraped_content)} sentences from {url}")
+            
+        except requests.exceptions.RequestException as e:
+            print(f"Error fetching the website: {e}")
+        except Exception as e:
+            print(f"An error occurred while scraping: {e}")
+    
+    def preprocess_text(self, text):
+        words = word_tokenize(text.lower())
+        words = [word for word in words if word.isalnum() and word not in self.stop_words]
+        return ' '.join(words)
+    
+    def find_best_response(self, question, threshold=0.1):
+        if not self.scraped_content:
+            return "I don't have any content to work with. Please scrape a website first."
+        
+        try:
+            processed_question = self.preprocess_text(question)
+            
+            all_texts = [processed_question] + [self.preprocess_text(sent) for sent in self.scraped_content]
+            
+            vectorizer = TfidfVectorizer()
+            tfidf_matrix = vectorizer.fit_transform(all_texts)
+            
+            similarities = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:])[0]
+            
+            best_match_index = similarities.argmax()
+            
+            if similarities[best_match_index] > threshold:
+                return self.scraped_content[best_match_index]
+            else:
+                return "I'm sorry, I couldn't find a relevant answer to your question."
+                
+        except Exception as e:
+            return f"An error occurred while processing your question: {e}"
+    
+    def chat(self):
+        print("\nChatbot: Hello! I'm ready to answer your questions.")
+        print("Type 'quit' to exit or 'scrape <url>' to scrape a new website.")
+        
+        while True:
+            user_input = input("\nYou: ").strip()
+            
+            if user_input.lower() == 'quit':
+                print("Chatbot: Goodbye!")
+                break
+                
+            if user_input.lower().startswith('scrape '):
+                url = user_input[7:].strip()
+                print("Chatbot: Scraping the website, please wait...")
+                self.scrape_website(url)
+                continue
+            
+            response = self.find_best_response(user_input)
+            print("Chatbot:", response)
+
+if __name__ == "__main__":
+    # Creating a chatbot instance
+    chatbot = WebScrapingChatbot()
+    
+    initial_url = "https://botpenguin.com/"  
+    print(f"Scraping initial website: {initial_url}")
+    chatbot.scrape_website(initial_url)
+    
+    # Start the chat interface
+    chatbot.chat()
